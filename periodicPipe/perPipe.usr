@@ -1,0 +1,227 @@
+C round periodic pipe flow 
+#define R 0.5
+#define zlength 4
+c
+C-----------------------------------------------------------------------
+C
+C  USER SPECIFIED ROUTINES:
+C
+C     - boundary conditions
+C     - initial conditions
+C     - variable properties
+C     - forcing function for fluid (f)
+C     - forcing function for passive scalar (q)
+C     - general purpose routine for checking errors etc.
+C
+C-----------------------------------------------------------------------
+      subroutine uservp (ix,iy,iz,ieg)
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userf  (ix,iy,iz,ieg)
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      FFY = 0.0
+      FFX = 0.0
+      FFZ = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userq  (ix,iy,iz,ieg)
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      qvol = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userchk
+
+      include 'SIZE'
+      include 'TOTAL'
+      
+      data icalld /0/
+      save icalld
+
+      real x0(3)
+      data x0 /0.0, 0.0, 0.0/
+      save x0
+
+      integer bIDs(1)
+      save iobj_wall
+
+      save atime,timel,drag_avg
+      
+c      return
+
+      CHARACTER*256 FILENAME
+      INTEGER STATUS
+      FILENAME = 'perPipe.usr'       ! Specify the file to read
+      
+      if (icalld.eq.0) then
+        bIDs(1) = 3
+        call create_obj(iobj_wall,bIDs,1)
+        drag_avg = 0
+        atime    = 0
+        timel    = time
+        icalld   = 1
+      endif
+
+      dtime = time - timel
+      atime = atime + dtime
+
+      ! averaging over time
+      if (atime.ne.0. .and. dtime.ne.0.) then
+        beta      = dtime / atime
+        alpha     = 1. - beta
+
+        call torque_calc(1.0,x0,.false.,.false.) ! compute wall shear
+        drag_avg = alpha*drag_avg + beta*dragz(iobj_wall)
+      endif
+
+      rho    = param(1)
+      dnu    = param(2)
+      A_w    = 2*pi * R * zlength
+      tw     = drag_avg / A_w
+      u_tau  = sqrt(tw / rho)
+      Re_tau = u_tau * R / dnu
+      if (nid.eq.0) write(*,*) 'Re_tau', Re_tau
+      if (nid.eq.0) write(*,*) 'tw', tw  
+
+      timel = time
+  
+      if (istep.eq.0) then
+         if(nid.eq.0) then ! MPI rank id = 0 
+            call print_usr(filename,status)
+            IF (STATUS .NE. 0) THEN
+               PRINT *, 'Error: Unable to read file ', FILENAME
+            END IF
+         endif
+      endif
+      
+c      ifto = .true.     ! include temperature field in output files
+c      ifpsco = .true.  ! include ps-scalar fields in output files
+c      call lambda2(t(1,1,1,1,1))
+      
+c      for MPI rank id = 0 
+      if(nid.eq.0) write(*,*) 'dynamic viscosity mu:', param(2) 
+
+c      call avg_all
+
+      if (mod(ISTEP,100).eq.0) call hpts()
+      
+      if (istep.eq.0) then
+         call outpost(vx,vy,vz,pr,t,'   ') ! "   " = output .f0 file prefix
+         write(*,*) 'INITIAL OUTPOST DONE'
+      endif
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userbc (ix,iy,iz,iside,ieg)
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine useric (ix,iy,iz,ieg)
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      rlam = sqrt(x**2 + y**2)
+      ux = 0
+      uy = 0
+      uz = 2*(1-rlam**2/R**2)
+
+      temp = 0
+      
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat2
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      do iel=1,nelv
+      do ifc=1,2*ndim
+         id_face = BoundaryID(ifc,iel)
+         if (id_face.eq.3) then    ! surface 3 for wall
+            cbc(ifc,iel,1) = 'W  '
+         endif
+      enddo
+      enddo
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat3
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      param(54) = -3  ! use >0 for const flowrate or <0 bulk vel
+                      ! flow direction is given by (1=x, 2=y, 3=z)
+      param(55) = 1.0 ! flowrate/bulk-velocity
+
+      return
+      end
+      
+c----------------------------------------------------------------------------------
+      subroutine print_usr(filename,status)
+
+      CHARACTER*256 FILENAME
+      INTEGER STATUS
+
+      ! Local variables
+      INTEGER UNIT_NUMBER, IOS
+      CHARACTER*100 LINE
+      
+      write(*,*) '--- BEGIN .usr FILE CONTENT ---'
+
+      UNIT_NUMBER = 10  ! Assign a logical unit number
+      OPEN(UNIT=UNIT_NUMBER, FILE=FILENAME, STATUS='OLD', IOSTAT=IOS)
+      
+      IF (IOS .NE. 0) THEN
+         STATUS = IOS  ! Return the error code
+         RETURN
+      END IF
+
+      ! Read and print the contents line by line
+      do while (IOS .eq. 0)  
+         READ(UNIT_NUMBER, '(A)', IOSTAT=IOS) LINE
+         IF (IOS .EQ. 0) PRINT *, LINE
+      end do
+
+      CLOSE(UNIT_NUMBER)  
+
+      ! Indicate success
+      STATUS = 0
+
+      write(*,*) '--- END .usr FILE CONTENT ---'
+      
+      return
+      end
